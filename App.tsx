@@ -14,46 +14,41 @@ const App: React.FC = () => {
   const [dnaStream, setDnaStream] = useState<string>("");
   const [fidelity, setFidelity] = useState<number>(100);
   const [selectedSize, setSelectedSize] = useState<ImageSize>("1K");
+  
+  // 核心状态：手动输入的 Key 具有最高优先级
+  const [manualKey, setManualKey] = useState<string>(() => localStorage.getItem('ARCHI_LOGIC_KEY') || "");
+  const [showKeyPanel, setShowKeyPanel] = useState(false);
 
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  /**
-   * 严格遵循 Google GenAI SDK 独立部署环境规范：
-   * 1. 假设 window.aistudio.openSelectKey 始终可用。
-   * 2. 调用后立即认为用户已尝试设置并继续。
-   */
-  const handleSelectKey = async () => {
+  // 初始化检测：如果没有 Key，直接弹出配置层
+  useEffect(() => {
+    const activeKey = manualKey || process.env.API_KEY;
+    if (!activeKey) {
+      setShowKeyPanel(true);
+    }
+  }, [manualKey]);
+
+  // 获取当前有效的 API Key
+  const getActiveKey = () => manualKey || process.env.API_KEY || "";
+
+  // 彻底修复：无论环境如何，点击“引擎管理”必须显示内置面板
+  const handleEngineManagement = () => {
+    setShowKeyPanel(true);
+    // 同时尝试调用系统级接口以保持兼容性
     const aistudio = (window as any).aistudio;
     if (aistudio && typeof aistudio.openSelectKey === 'function') {
-      try {
-        await aistudio.openSelectKey();
-        console.log("API Key interaction initiated.");
-      } catch (err) {
-        console.error("Failed to open selector:", err);
-      }
-    } else {
-      console.warn("AI Studio context not found.");
+      aistudio.openSelectKey().catch(() => {});
     }
   };
 
-  // 初始静默检查
-  useEffect(() => {
-    const init = async () => {
-      const aistudio = (window as any).aistudio;
-      if (aistudio && typeof aistudio.hasSelectedApiKey === 'function') {
-        try {
-          const hasKey = await aistudio.hasSelectedApiKey();
-          if (!hasKey) {
-            await aistudio.openSelectKey();
-          }
-        } catch (e) {
-          // 静默失败，不弹出 alert 影响 UI
-        }
-      }
-    };
-    init();
-  }, []);
+  const saveManualKey = (val: string) => {
+    const trimmed = val.trim();
+    setManualKey(trimmed);
+    localStorage.setItem('ARCHI_LOG_KEY', trimmed);
+    setShowKeyPanel(false);
+  };
 
   const calculateAspectRatio = (width: number, height: number): string => {
     const ratio = width / height;
@@ -103,25 +98,28 @@ const App: React.FC = () => {
   };
 
   const auditNeuralDNA = async (imageData: string) => {
+    const key = getActiveKey();
+    if (!key) {
+      setShowKeyPanel(true);
+      return;
+    }
     setStatus('analyzing');
     try {
-      // 每次创建新实例以确保获取 process.env.API_KEY 最新状态
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+      const ai = new GoogleGenAI({ apiKey: key });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: [{
           parts: [
             { inlineData: { data: imageData.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: `[DETERMINISTIC DNA AUDIT] 提取此图色彩逻辑，包括确切HEX、渐变步长及阴影特性，作为填色唯一参考基准。` }
+            { text: `[DNA AUDIT] 提取此图高级色彩布局逻辑：主要色值、渐变逻辑、阴影分布。` }
           ]
         }]
       });
       setDnaStream(response.text || "");
     } catch (err: any) {
       console.error("Audit Error:", err);
-      // 按照规范：如果 Requested entity was not found，重设 Key
-      if (err.message?.includes("Requested entity was not found") || err.message?.includes("API_KEY")) {
-        handleSelectKey();
+      if (err.message?.includes("API_KEY") || err.message?.includes("403") || err.message?.includes("not found")) {
+        setShowKeyPanel(true);
       }
     } finally {
       setStatus('idle');
@@ -130,17 +128,15 @@ const App: React.FC = () => {
 
   const executeSynthesis = async () => {
     if (!lineartImage) return;
+    const key = getActiveKey();
+    if (!key) {
+      setShowKeyPanel(true);
+      return;
+    }
     setStatus('rendering');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-      const prompt = `
-        [DETERMINISTIC RENDERING ENGINE - V28]
-        1. 严格锁定线稿，0像素偏移，禁止幻觉物体。
-        2. 基于 [${dnaStream}] 注入高级线性渐变，禁止单色平涂。
-        3. 阴影偏差控制在3%以内。
-        4. 剔除艺术笔触，保持工业级纯净。
-      `;
-
+      const ai = new GoogleGenAI({ apiKey: key });
+      const prompt = `[RENDER V28] 严格锁定线稿，基于[${dnaStream}]进行高级渐变填色，阴影偏差<3%，极致工业纯净。`;
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: {
@@ -157,15 +153,14 @@ const App: React.FC = () => {
           }
         }
       });
-
       const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
       if (part?.inlineData) {
         setResultImage(`data:image/png;base64,${part.inlineData.data}`);
       }
     } catch (err: any) {
       console.error("Synthesis Error:", err);
-      if (err.message?.includes("Requested entity was not found") || err.message?.includes("429")) {
-        handleSelectKey();
+      if (err.message?.includes("API_KEY") || err.message?.includes("403") || err.message?.includes("not found")) {
+        setShowKeyPanel(true);
       }
     } finally {
       setStatus('idle');
@@ -173,7 +168,55 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen bg-[#020202] text-[#a1a1aa] flex overflow-hidden font-sans">
+    <div className="h-screen bg-[#020202] text-[#a1a1aa] flex overflow-hidden font-sans select-none">
+      {/* 彻底独立的高优先级 API Key 输入层 */}
+      {showKeyPanel && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/90 backdrop-blur-3xl transition-all duration-500">
+          <div className="w-[480px] p-12 bg-[#0a0a0a] border border-white/10 rounded-[3rem] shadow-[0_0_120px_rgba(0,0,0,0.9)] space-y-10 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500/0 via-emerald-500 to-emerald-500/0"></div>
+            <button 
+              onClick={() => setShowKeyPanel(false)} 
+              className="absolute top-8 right-8 text-white/20 hover:text-white transition-colors p-2"
+            >
+              ✕
+            </button>
+            <div className="space-y-3">
+              <h3 className="text-white text-2xl font-black italic tracking-tighter uppercase">引擎配置 / SYSTEM AUTH</h3>
+              <p className="text-white/30 text-[11px] uppercase tracking-widest leading-relaxed font-bold">
+                独立部署环境需要手动配置 API KEY。<br/>
+                此密钥将仅保存在您的本地浏览器中。
+              </p>
+            </div>
+            <div className="space-y-5">
+              <div className="relative group">
+                <input 
+                  type="password" 
+                  autoFocus
+                  value={manualKey}
+                  onChange={(e) => setManualKey(e.target.value)}
+                  placeholder="请输入您的 Google Gemini API Key" 
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-6 py-5 text-emerald-500 text-sm focus:border-emerald-500/50 focus:bg-white/[0.05] outline-none transition-all font-mono tracking-widest"
+                />
+              </div>
+              <button 
+                onClick={() => saveManualKey(manualKey)}
+                className="w-full py-5 bg-emerald-500 text-white text-[12px] font-black uppercase tracking-[0.6em] rounded-2xl hover:bg-emerald-400 hover:shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all active:scale-95"
+              >
+                激活 AI 引擎
+              </button>
+              <div className="flex flex-col gap-3 pt-4">
+                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-center text-[9px] text-white/20 hover:text-emerald-500 transition-colors uppercase tracking-[0.2em] font-black">
+                  1. 访问 Google AI Studio 获取密钥
+                </a>
+                <p className="text-center text-[9px] text-red-500/40 uppercase tracking-[0.2em] font-black italic">
+                  * 必须使用已开启计费的 Paid Project 密钥
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <aside className="w-[320px] lg:w-[400px] border-r border-white/5 bg-[#080808] p-8 flex flex-col gap-10 overflow-y-auto scrollbar-hide shrink-0 z-20">
         <header className="space-y-1">
           <h1 className="text-white text-2xl font-black tracking-[-0.05em] uppercase italic leading-none">
@@ -193,7 +236,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">02. 线稿 (比例锁: {aspectRatio})</label>
+            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">02. 线稿 (比例: {aspectRatio})</label>
             <div onClick={() => lineartInputRef.current?.click()} className="aspect-video bg-white/[0.02] border border-white/10 rounded-[2rem] cursor-pointer hover:border-emerald-500/40 transition-all flex items-center justify-center overflow-hidden group">
               {lineartImage ? <img src={lineartImage} className="w-full h-full object-contain p-8 group-hover:scale-105 transition-transform duration-[2s]" /> : <div className="text-white/5 text-[10px] font-black tracking-widest uppercase">CAD Lineart</div>}
               <input ref={lineartInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'lineart')} />
@@ -210,7 +253,7 @@ const App: React.FC = () => {
             <input type="range" min="0" max="100" value={fidelity} onChange={(e) => setFidelity(parseInt(e.target.value))} className="w-full h-1 bg-white/5 appearance-none accent-emerald-500 rounded-full cursor-pointer" />
           </div>
 
-          <button onClick={executeSynthesis} disabled={status !== 'idle' || !lineartImage} className="w-full py-6 bg-white text-black text-[11px] font-black uppercase tracking-[0.8em] rounded-[1rem] hover:bg-emerald-500 hover:text-white transition-all shadow-2xl disabled:opacity-5">
+          <button onClick={executeSynthesis} disabled={status !== 'idle' || !lineartImage} className="w-full py-6 bg-white text-black text-[11px] font-black uppercase tracking-[0.8em] rounded-[1rem] hover:bg-emerald-500 hover:text-white transition-all shadow-2xl disabled:opacity-5 disabled:cursor-not-allowed">
             {status === 'rendering' ? '执行渲染中...' : '生成高级色彩布局'}
           </button>
         </section>
@@ -225,7 +268,7 @@ const App: React.FC = () => {
           </div>
           <button 
             type="button"
-            onClick={handleSelectKey} 
+            onClick={handleEngineManagement} 
             className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest cursor-pointer z-[100]"
           >
             引擎管理
@@ -234,9 +277,7 @@ const App: React.FC = () => {
 
         <div className="w-full h-full max-w-7xl rounded-[4rem] border border-white/[0.03] bg-[#050505] flex items-center justify-center overflow-hidden relative shadow-[0_0_120px_rgba(0,0,0,0.6)] group">
           {status === 'analyzing' && (
-            <div className="flex flex-col items-center gap-6 animate-pulse">
-              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 色彩审计中...</div>
-            </div>
+            <div className="flex flex-col items-center gap-6 animate-pulse text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 色彩审计中...</div>
           )}
           
           {status === 'rendering' && (
@@ -254,7 +295,7 @@ const App: React.FC = () => {
           )}
 
           {resultImage && status === 'idle' && (
-            <div className="w-full h-full flex items-center justify-center animate-reveal bg-white">
+            <div className="w-full h-full flex items-center justify-center animate-reveal bg-white relative">
               <img src={resultImage} className="max-w-full max-h-full object-contain" />
               <div className="absolute inset-0 bg-black/98 opacity-0 group-hover:opacity-100 transition-all duration-700 flex flex-col items-center justify-center gap-10 backdrop-blur-3xl">
                 <a href={resultImage} download="COLOR_LAYOUT.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出图纸</a>
@@ -263,12 +304,6 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
-
-        <footer className="absolute bottom-12 flex gap-32 opacity-[0.02] text-[9px] font-black uppercase tracking-[1.5em] pointer-events-none">
-          <span>Stochastic Noise Suppression</span>
-          <span>Zero Hallucination Anchor</span>
-          <span>Rigid Geometry Mapping</span>
-        </footer>
       </main>
 
       <style>{`
