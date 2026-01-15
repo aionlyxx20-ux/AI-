@@ -35,55 +35,36 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. 深度状态同步逻辑
-  const syncApiKeyStatus = async () => {
-    try {
-      const win = window as any;
-      if (win.aistudio && typeof win.aistudio.hasSelectedApiKey === 'function') {
-        const selected = await win.aistudio.hasSelectedApiKey();
-        if (selected !== hasApiKey) setHasApiKey(selected);
-        return selected;
-      }
-    } catch (e) {
-      console.warn("API status check bypassed");
+  // 1. 核心：检查用户是否已经选择了自己的 API Key
+  const checkUserApiKey = async (): Promise<boolean> => {
+    const win = window as any;
+    if (win.aistudio && typeof win.aistudio.hasSelectedApiKey === 'function') {
+      const selected = await win.aistudio.hasSelectedApiKey();
+      setHasApiKey(selected);
+      return selected;
     }
     return false;
   };
 
-  // 2. 核心：极致稳定的钥匙弹出函数（原生跨域级）
-  const triggerKeyPicker = () => {
+  // 2. 核心：弹出钥匙选择窗口（让用户输入或选择自己的 Paid Key）
+  const handleOpenKeyPicker = async () => {
     const win = window as any;
-    console.log("[VAULT] Triggering picker via redundant pathways...");
-
-    // 路径 A: 标准 API 调用
     if (win.aistudio && typeof win.aistudio.openSelectKey === 'function') {
-      try {
-        win.aistudio.openSelectKey();
-      } catch (e) {
-        console.warn("Path A failed", e);
-      }
+      await win.aistudio.openSelectKey();
+      // 触发后假设用户会操作，同步 UI 状态
+      setHasApiKey(true);
+      // 链接到计费文档提示
+      console.log("Billing Doc: https://ai.google.dev/gemini-api/docs/billing");
+    } else {
+      alert("当前环境不支持 API 密钥选择，请在 AI Studio 中打开此应用。");
     }
-
-    // 路径 B: 跨域 PostMessage 协议 (解决 Vercel/Iframe 隔离)
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: 'AISTUDIO_OPEN_KEY_PICKER' }, '*');
-      }
-    } catch (e) {
-      console.warn("Path B blocked by sandbox", e);
-    }
-
-    // 路径 C: 强制 UI 响应并开启状态追踪
-    setHasApiKey(true); 
-    setTimeout(syncApiKeyStatus, 1500);
   };
 
-  // 3. 将触发器挂载到全局以支持原生 HTML 调用
+  // 初始化与定时同步
   useEffect(() => {
-    (window as any)._vault_key_trigger = triggerKeyPicker;
-    syncApiKeyStatus();
-    const interval = setInterval(syncApiKeyStatus, 3000);
-    return () => clearInterval(interval);
+    checkUserApiKey();
+    const timer = setInterval(checkUserApiKey, 3000);
+    return () => clearInterval(timer);
   }, []);
 
   const handleModeSwitch = (mode: RenderMode) => {
@@ -133,21 +114,23 @@ const App: React.FC = () => {
     link.click();
   };
 
+  // 3. 核心执行逻辑：即时创建实例，使用用户算力
   const executeSynthesis = async () => {
     if (!lineartImage || status !== 'idle') return;
     if (!isEnhance && !refImage) return;
 
-    // 获取最新 API 实例
-    const keySelected = await syncApiKeyStatus();
-    if (!keySelected && !process.env.API_KEY) {
-      alert("API 授权未完成。正在自动唤起选择窗口...");
-      triggerKeyPicker();
+    // A. 强制校验：必须有选中的 Key 才能进行高价值渲染
+    const isReady = await checkUserApiKey();
+    if (!isReady) {
+      alert("检测到 API 算力未锁定。请点击右上角 'API密钥' 并选择一个已激活结算 (Billing) 的付费项目密钥。");
+      handleOpenKeyPicker();
       return;
     }
     
     setStatus('rendering');
     
     try {
+      // B. 即时实例化：确保使用的是 process.env.API_KEY 中最新注入的用户 Key
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       const parts: any[] = [];
       const apiSize = selectedSize === "4K输出" ? "4K" : selectedSize === "2K输出" ? "2K" : "1K";
@@ -216,9 +199,12 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Rendering Error:", err);
+      // C. 异常处理：如果是 404/Not Found，说明 Key 无效，重置状态
       if (err.message?.includes("Requested entity was not found")) {
         setHasApiKey(false);
-        alert("API 密钥无效或不支持当前模型。请点击右上角重选 Paid 密钥。");
+        alert("API 密钥校验失败或项目未激活。请点击 'API密钥' 重新选择一个处于 Paid 状态的项目密钥。");
+      } else {
+        alert("渲染服务遇到问题，请检查您的 API 余额或网络连接。");
       }
     } finally {
       setStatus('idle');
@@ -283,14 +269,13 @@ const App: React.FC = () => {
            <div className="flex items-center gap-10">
              <div className="flex flex-col items-end">
                <span className={`text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md transition-all duration-500 ${hasApiKey ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                 {hasApiKey ? 'API: CONNECTED' : 'API: LOCKED'}
+                 {hasApiKey ? 'API: 已连接' : 'API: 未绑定'}
                </span>
                <span className="text-[10px] text-white/20 font-bold italic mt-1 uppercase tracking-tighter">Topology Aspect: {lineartAspectRatio}</span>
              </div>
              
-             {/* 核心修复：极致稳定的原生调用按钮 */}
              <button 
-               onPointerDown={triggerKeyPicker}
+               onClick={handleOpenKeyPicker}
                className="h-12 flex items-center gap-4 px-6 rounded-2xl bg-white/5 border border-white/10 text-white hover:bg-white/10 hover:border-white/30 transition-all shadow-xl active:scale-95 group"
              >
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] group-hover:text-amber-500">API密钥</span>
