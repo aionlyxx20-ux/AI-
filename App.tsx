@@ -23,7 +23,7 @@ const App: React.FC = () => {
   const [blendWeight, setBlendWeight] = useState<number>(100);
   const [lineartAspectRatio, setLineartAspectRatio] = useState<string>("1:1");
   
-  // API 相关状态
+  // API 相关状态：优先从本地存储读取
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [manualApiKey, setManualApiKey] = useState(() => localStorage.getItem('ARCHI_LOGIC_KEY') || '');
   const [isEnvKeyActive, setIsEnvKeyActive] = useState(false);
@@ -39,20 +39,15 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  // 核心：多重路径检查 API 状态
+  // 持续同步环境中的 Key 状态
   const checkApiStatus = async () => {
     const win = window as any;
     let envActive = false;
-    
-    // 路径 A: AI Studio 官方注入检查
     if (win.aistudio && typeof win.aistudio.hasSelectedApiKey === 'function') {
       envActive = await win.aistudio.hasSelectedApiKey();
-    } 
-    // 路径 B: 环境变量检查
-    else if (process.env.API_KEY && process.env.API_KEY.length > 10) {
+    } else if (process.env.API_KEY && process.env.API_KEY.length > 10) {
       envActive = true;
     }
-
     setIsEnvKeyActive(envActive);
   };
 
@@ -100,14 +95,13 @@ const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const getActiveKey = () => {
-    if (isEnvKeyActive) return process.env.API_KEY;
-    return manualApiKey;
-  };
-
+  // 关键：点击执行时才确定最终使用的 Key
   const executeSynthesis = async () => {
-    const activeKey = getActiveKey();
-    if (!activeKey || activeKey.length < 10) {
+    // 优先级：手动输入 > 自动注入
+    const finalKey = manualApiKey.trim() || process.env.API_KEY || '';
+    
+    if (!finalKey || finalKey.length < 10) {
+      alert("检测到 API Key 缺失，请先在控制台输入您的 Paid 密钥。");
       setShowKeyInput(true);
       return;
     }
@@ -118,34 +112,44 @@ const App: React.FC = () => {
     setStatus('rendering');
     
     try {
-      const ai = new GoogleGenAI({ apiKey: activeKey });
+      // 核心：即时实例化 GoogleGenAI，确保拿到的是最新的 finalKey
+      const ai = new GoogleGenAI({ apiKey: finalKey });
       const apiSize = selectedSize === "4K输出" ? "4K" : selectedSize === "2K输出" ? "2K" : "1K";
       const parts: any[] = [];
 
       if (isEnhance) {
         parts.push({ inlineData: { data: lineartImage.split(',')[1], mimeType: 'image/png' } });
-        parts.push({ text: `[TASK: HD_PBR_ENHANCE] texture:${enhanceParams.texture} smoothing:${enhanceParams.smoothing} detail:${enhanceParams.detail} light:${enhanceParams.light}. Maintain CAD lines perfectly.` });
+        parts.push({ text: `[PROTOCOL: HD_REMASTER] Target texture density: ${enhanceParams.texture}%, Detail restoration: ${enhanceParams.detail}%, Global illumination: ${enhanceParams.light}%. Strictly preserve geometry.` });
       } else {
         parts.push({ inlineData: { data: lineartImage.split(',')[1], mimeType: 'image/png' } });
         parts.push({ inlineData: { data: refImage!.split(',')[1], mimeType: 'image/jpeg' } });
-        parts.push({ text: `[TASK: ARCH_SYNTHESIS] Infuse Image2 materials into Image1 lines. BlendWeight: ${blendWeight}%. Photorealistic architecture rendering.` });
+        parts.push({ text: `[PROTOCOL: SPATIAL_SYNTHESIS] Transfer material properties and lighting from Image 2 to CAD lines in Image 1. Blend weight: ${blendWeight}%. Photorealistic architecture output.` });
       }
 
       const response: GenerateContentResponse = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: { parts: parts },
-        config: { imageConfig: { aspectRatio: lineartAspectRatio as any, imageSize: apiSize as any } }
+        config: { 
+          imageConfig: { 
+            aspectRatio: lineartAspectRatio as any, 
+            imageSize: apiSize as any 
+          } 
+        }
       });
 
       const imgPart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      if (imgPart?.inlineData) setResultImage(`data:image/png;base64,${imgPart.inlineData.data}`);
+      if (imgPart?.inlineData) {
+        setResultImage(`data:image/png;base64,${imgPart.inlineData.data}`);
+      } else {
+        throw new Error("Model returned no image data.");
+      }
     } catch (err: any) {
-      console.error(err);
-      if (err.message?.includes("billing") || err.message?.includes("not found")) {
-        alert("计费错误：请确保您的 API Key 属于一个已开启付费结算（Billing）的项目。");
+      console.error("Rendering failed:", err);
+      if (err.message?.includes("billing") || err.message?.includes("not found") || err.message?.includes("403")) {
+        alert("计费或权限错误：请确保您的 API Key 属于一个【已关联付费结算账户】的项目。免费 Key 无法生成 1K 以上图像。");
         setShowKeyInput(true);
       } else {
-        alert("执行失败: " + err.message);
+        alert("执行失败: " + (err.message || "未知错误"));
       }
     } finally {
       setStatus('idle');
@@ -153,8 +157,9 @@ const App: React.FC = () => {
   };
 
   const saveManualKey = (val: string) => {
-    setManualApiKey(val);
-    localStorage.setItem('ARCHI_LOGIC_KEY', val);
+    const trimmed = val.trim();
+    setManualApiKey(trimmed);
+    localStorage.setItem('ARCHI_LOGIC_KEY', trimmed);
   };
 
   return (
@@ -191,11 +196,11 @@ const App: React.FC = () => {
            <div className="flex items-center gap-8">
              <div className="flex flex-col items-end">
                <span className={`text-[9px] font-black uppercase px-2 py-1 rounded ${isEnvKeyActive || manualApiKey ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'}`}>
-                 {isEnvKeyActive ? 'API: 自动注入' : manualApiKey ? 'API: 已手动设置' : 'API: 未绑定'}
+                 {manualApiKey ? 'API: 自定义(已保存)' : isEnvKeyActive ? 'API: 环境注入(就绪)' : 'API: 未连接'}
                </span>
                <span className="text-[10px] text-white/20 mt-1 uppercase italic">Aspect: {lineartAspectRatio}</span>
              </div>
-             <button onClick={() => setShowKeyInput(!showKeyInput)} className="p-3 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-all text-white active:scale-95">
+             <button onClick={() => setShowKeyInput(!showKeyInput)} className={`p-3 rounded-xl border transition-all text-white active:scale-95 ${showKeyInput ? 'bg-amber-500 border-amber-500' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
              </button>
            </div>
@@ -210,16 +215,19 @@ const App: React.FC = () => {
             </div>
 
             {showKeyInput && (
-              <div className="p-6 bg-emerald-500/5 border border-emerald-500/20 rounded-3xl space-y-4 animate-in fade-in slide-in-from-top-4">
-                <p className="text-[10px] font-black uppercase text-emerald-500">手动设置 API KEY (Paid)</p>
+              <div className="p-6 bg-white/[0.03] border border-white/10 rounded-3xl space-y-4 animate-in fade-in slide-in-from-top-4">
+                <div className="flex justify-between items-center">
+                  <p className="text-[10px] font-black uppercase text-amber-500">手动设置 API KEY</p>
+                  <button onClick={() => saveManualKey('')} className="text-[8px] text-rose-500 uppercase font-bold hover:underline">清除</button>
+                </div>
                 <input 
                   type="password" 
                   value={manualApiKey}
                   onChange={(e) => saveManualKey(e.target.value)}
-                  placeholder="在此粘贴您的 Gemini API Key"
-                  className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:border-emerald-500 outline-none transition-all"
+                  placeholder="在此输入 Gemini API Key"
+                  className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:border-amber-500 outline-none transition-all"
                 />
-                <p className="text-[9px] opacity-40 leading-relaxed italic">注：若环境无法自动登录，请在此手动输入。Key 将加密存储于本地。</p>
+                <p className="text-[9px] opacity-40 leading-relaxed italic uppercase">提示：高级图像渲染需使用关联了 Billing 的付费账户密钥。</p>
               </div>
             )}
 
@@ -266,7 +274,7 @@ const App: React.FC = () => {
             <button 
               onClick={executeSynthesis} 
               disabled={status === 'rendering'} 
-              className={`mt-auto w-full py-6 rounded-3xl text-[11px] font-black tracking-[0.4em] uppercase transition-all ${status === 'rendering' ? 'bg-white/10 text-white/20 animate-pulse' : 'bg-white text-black hover:scale-[1.02] active:scale-95'}`}
+              className={`mt-auto w-full py-6 rounded-3xl text-[11px] font-black tracking-[0.4em] uppercase transition-all ${status === 'rendering' ? 'bg-white/10 text-white/20 animate-pulse cursor-wait' : 'bg-white text-black hover:scale-[1.02] active:scale-95'}`}
             >
               {status === 'rendering' ? 'Synthesis Running...' : 'Start V8 Synthesis'}
             </button>
@@ -283,7 +291,7 @@ const App: React.FC = () => {
               ) : resultImage ? (
                 <div className="group relative w-full h-full flex items-center justify-center p-12">
                   <img src={resultImage} className="max-w-full max-h-full object-contain rounded-[3rem] shadow-2xl animate-in zoom-in-95 duration-700" />
-                  <button onClick={() => { const link = document.createElement('a'); link.href = resultImage; link.download = 'result.png'; link.click(); }} className="absolute inset-0 m-auto w-fit h-fit px-10 py-5 bg-white text-black text-[10px] font-black uppercase tracking-widest rounded-full opacity-0 group-hover:opacity-100 transition-all transform translate-y-4 group-hover:translate-y-0 shadow-2xl">Download Result</button>
+                  <button onClick={() => { const link = document.createElement('a'); link.href = resultImage; link.download = 'result.png'; link.click(); }} className="absolute inset-0 m-auto w-fit h-fit px-10 py-5 bg-white text-black text-[10px] font-black uppercase tracking-widest rounded-full opacity-0 group-hover:opacity-100 transition-all transform translate-y-4 group-hover:translate-y-0 shadow-2xl pointer-events-auto">Download Result</button>
                 </div>
               ) : (
                 <span className="text-[25rem] font-black italic opacity-[0.02] select-none">V8</span>
