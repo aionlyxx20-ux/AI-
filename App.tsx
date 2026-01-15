@@ -35,16 +35,14 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  // 初始化检查 API KEY 状态
+  // 初始化检查 API KEY 状态，但不强制弹出全屏拦截器
   useEffect(() => {
     const checkKey = async () => {
       try {
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasApiKey(selected);
-        if (!selected) setStatus('key_needed');
       } catch (e) {
         console.error("API Key check failed", e);
-        setStatus('key_needed');
       }
     };
     checkKey();
@@ -52,7 +50,9 @@ const App: React.FC = () => {
 
   const handleOpenKeyPicker = async () => {
     try {
+      // 直接调用内置的钥匙选择器，实现“内置输入钥匙”逻辑
       await window.aistudio.openSelectKey();
+      // 假设选择成功即同步状态
       setHasApiKey(true);
       setStatus('idle');
     } catch (e) {
@@ -113,13 +113,15 @@ const App: React.FC = () => {
 
     const keySelected = await window.aistudio.hasSelectedApiKey();
     if (!keySelected) {
-      setStatus('key_needed');
+      // 如果未授权，提示通过右上角按钮处理
+      alert("请通过右上角 API 按钮配置密钥后再进行渲染。");
       return;
     }
     
     setStatus('rendering');
     
     try {
+      // 每次调用时重新实例化以确保使用最新选择的 key
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       const parts: any[] = [];
       const apiSize = selectedSize === "4K输出" ? "4K" : selectedSize === "2K输出" ? "2K" : "1K";
@@ -190,7 +192,7 @@ const App: React.FC = () => {
       console.error("Rendering Error:", err);
       if (err.message?.includes("Requested entity was not found")) {
         setHasApiKey(false);
-        setStatus('key_needed');
+        alert("API 授权失效，请通过右上角重新配置。");
       }
     } finally {
       setStatus('idle');
@@ -213,29 +215,8 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen bg-black text-[#666] flex overflow-hidden font-sans select-none">
-      {/* 强化 API KEY 拦截器：更直观，更易用 */}
-      {status === 'key_needed' && (
-        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-[#0a0a0a] border border-white/20 p-12 rounded-[4rem] shadow-2xl text-center space-y-10 animate-in zoom-in-95 duration-500">
-            <div className="w-24 h-24 bg-amber-500 rounded-full flex items-center justify-center mx-auto text-black shadow-[0_0_50px_rgba(245,158,11,0.4)]">
-              <svg className="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-            </div>
-            <div className="space-y-4">
-              <h3 className="text-white text-3xl font-black tracking-tighter italic uppercase">V8 内核未激活</h3>
-              <p className="text-[12px] text-white/40 leading-relaxed px-2">
-                系统检测到渲染引擎处于锁定状态。请连接您的付费 API 密钥以启动高精度拓扑合成及 4K 导出功能。
-                <br/><br/>
-                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="text-amber-500 hover:underline font-bold">API 计费文档及设置指南</a>
-              </p>
-            </div>
-            <button onClick={handleOpenKeyPicker} className="w-full py-6 bg-white text-black rounded-3xl font-black text-[11px] uppercase tracking-[0.4em] hover:bg-amber-500 transition-all shadow-2xl active:scale-95">
-              立即配置 API KEY
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 优化后的导航栏：更高对比度 */}
+      
+      {/* 侧边导航栏：高对比度图标 */}
       <nav className="w-24 border-r border-white/10 flex flex-col items-center py-10 bg-[#050505] z-50 shadow-2xl">
         <div className="w-14 h-14 bg-white/5 rounded-3xl flex items-center justify-center mb-16 border border-white/10 group cursor-pointer" onClick={() => window.location.reload()}>
             <div className={`w-7 h-7 rounded-sm rotate-45 transition-all duration-700 ${isEnhance ? 'bg-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.7)]' : 'bg-emerald-500 shadow-[0_0_25px_rgba(16,185,129,0.7)]'}`} />
@@ -245,14 +226,14 @@ const App: React.FC = () => {
             <button 
               key={mode}
               onClick={() => handleModeSwitch(mode)} 
-              className={`flex flex-col items-center gap-3 group transition-all ${renderMode === mode ? (mode === 'enhance' ? 'text-amber-500' : 'text-emerald-500') : 'text-white/60 hover:text-white'}`}
+              className={`flex flex-col items-center gap-3 group transition-all ${renderMode === mode ? (mode === 'enhance' ? 'text-amber-500' : 'text-emerald-500') : 'text-white hover:text-white'}`}
             >
-              <div className={`p-4 rounded-[1.5rem] border-2 transition-all duration-500 ${renderMode === mode ? (mode === 'enhance' ? 'border-amber-500 bg-amber-500/10 shadow-[0_0_30px_rgba(245,158,11,0.2)]' : 'border-emerald-500 bg-emerald-500/10 shadow-[0_0_30px_rgba(16,185,129,0.2)]') : 'border-white/5 bg-white/5 group-hover:border-white/20'}`}>
+              <div className={`p-4 rounded-[1.5rem] border-2 transition-all duration-500 ${renderMode === mode ? (mode === 'enhance' ? 'border-amber-500 bg-amber-500/10 shadow-[0_0_30px_rgba(245,158,11,0.2)]' : 'border-emerald-500 bg-emerald-500/10 shadow-[0_0_30px_rgba(16,185,129,0.2)]') : 'border-white/20 bg-white/5 group-hover:border-white/40'}`}>
                 {mode === 'spatial' && <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>}
                 {mode === 'enhance' && <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path d="M15 3l6 6-6 6M9 21l-6-6 6-6"/></svg>}
                 {mode === 'plan' && <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path d="M3 3h18v18H3zM3 9h18M9 3v18"/></svg>}
               </div>
-              <span className={`text-[9px] font-black uppercase tracking-[0.2em] transition-opacity ${renderMode === mode ? 'opacity-100' : 'opacity-40 group-hover:opacity-100'}`}>
+              <span className={`text-[9px] font-black uppercase tracking-[0.2em] transition-opacity ${renderMode === mode ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'}`}>
                 {mode === 'spatial' ? 'Spatial' : mode === 'enhance' ? 'Master' : 'Plan'}
               </span>
             </button>
@@ -261,6 +242,7 @@ const App: React.FC = () => {
       </nav>
 
       <div className="flex-1 flex flex-col">
+        {/* 顶部状态栏 */}
         <header className="h-20 flex items-center justify-between px-10 border-b border-white/10 bg-[#020202] shadow-xl relative z-10">
            <div className="flex items-center gap-6">
              {(["1K输出", "2K输出", "4K输出"] as ImageSize[]).map(size => (
@@ -273,20 +255,30 @@ const App: React.FC = () => {
                </button>
              ))}
            </div>
+           
            <div className="flex items-center gap-10">
              <div className="flex flex-col items-end">
                <span className={`text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ${hasApiKey ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                 {hasApiKey ? 'ENGINE: SYNCHRONIZED' : 'ENGINE: UNLINKED'}
+                 {hasApiKey ? 'API: CONNECTED' : 'API: LOCKED'}
                </span>
                <span className="text-[10px] text-white/20 font-bold italic mt-1 uppercase tracking-tighter">Topology Aspect: {lineartAspectRatio}</span>
              </div>
-             <button onClick={handleOpenKeyPicker} className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 hover:border-white/30 transition-all shadow-xl active:scale-90">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+             
+             {/* 核心功能按钮：API 钥匙内置选择器 */}
+             <button 
+               onClick={handleOpenKeyPicker} 
+               className="h-12 flex items-center gap-3 px-5 rounded-2xl bg-white/5 border border-white/10 text-white hover:bg-white/10 hover:border-white/30 transition-all shadow-xl active:scale-95 group"
+             >
+                <span className="text-[10px] font-black uppercase tracking-widest opacity-60 group-hover:opacity-100">API KEY</span>
+                <svg className="w-5 h-5 text-white/60 group-hover:text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
              </button>
            </div>
         </header>
 
         <div className="flex-1 flex overflow-hidden">
+          {/* 左侧控制面板 */}
           <aside className="w-[420px] bg-[#030303] p-12 flex flex-col gap-12 border-r border-white/10 overflow-y-auto custom-scrollbar shadow-inner">
             <div className="space-y-3">
               <h2 className="text-white text-3xl font-black tracking-tighter italic uppercase leading-none">Archi-Logic V8</h2>
@@ -342,6 +334,7 @@ const App: React.FC = () => {
             </button>
           </aside>
 
+          {/* 主展示区 */}
           <main className="flex-1 bg-[#010101] p-20 flex items-center justify-center relative">
             <div className="w-full h-full rounded-[8rem] bg-[#020202] border border-white/10 flex items-center justify-center overflow-hidden relative shadow-[0_120px_200px_rgba(0,0,0,0.9)]">
               {status === 'rendering' ? (
